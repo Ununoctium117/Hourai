@@ -1,9 +1,8 @@
+use protobuf_codegen::{Codegen, Customize};
 use std::env::VarError;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
-
-extern crate protobuf_codegen_pure;
 
 fn find_proto_files(root: impl AsRef<Path>) -> impl Iterator<Item = Box<Path>> {
     WalkDir::new(root.as_ref())
@@ -23,17 +22,16 @@ fn protobuf_codegen(src_dir: &str, out_dir: &str) {
     for path in &paths {
         println!("Input Proto File: {:?}", path);
     }
-    protobuf_codegen_pure::Codegen::new()
-        .customize(protobuf_codegen_pure::Customize {
-            serde_derive: Some(true),
-            gen_mod_rs: Some(true),
-            ..Default::default()
-        })
+
+    Codegen::new()
+        .pure()
+        .customize(Customize::default().gen_mod_rs(true))
         .out_dir(&proto_out_path)
         .inputs(&paths[..])
         .include(src_dir)
         .run()
         .expect("Failed to run Rust Protobuf codegen.");
+
     println!("Protobuf codegen complete.");
 }
 

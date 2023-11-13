@@ -4,6 +4,7 @@ mod keys;
 pub mod modlog;
 mod protobuf;
 
+use hourai::gateway::Session;
 pub use redis::*;
 
 use self::compression::Compressed;
@@ -12,7 +13,6 @@ use self::keys::{CacheKey, GuildKey, Id};
 use self::protobuf::Protobuf;
 use anyhow::Result;
 use hourai::{
-    gateway::shard::ResumeSession,
     models::{
         channel::Channel,
         guild::{Guild, PartialGuild, Permissions, Role},
@@ -162,7 +162,7 @@ impl MessageCache {
             msg.set_guild_id(guild_id.get())
         }
 
-        let user = msg.mut_author();
+        let user = msg.author.as_mut().unwrap();
         let author = message.author();
         user.set_id(author.id().get());
         user.set_username(author.name().to_owned());
@@ -393,10 +393,8 @@ impl GuildCache {
                 .collect(),
             _ => {
                 let guild_key = CacheKey::Guild(self.guild_id);
-                let resource_keys: Vec<_> = resource_ids
-                    .iter()
-                    .map(|id| GuildKey::from(*id))
-                    .collect();
+                let resource_keys: Vec<_> =
+                    resource_ids.iter().map(|id| GuildKey::from(*id)).collect();
                 let protos: Vec<Option<Protobuf<T::Proto>>> = self
                     .redis
                     .connection_mut()
@@ -475,7 +473,7 @@ impl GuildCache {
     ) -> Result<Permissions> {
         // The owner has all permissions.
         if let Some(guild) = self.fetch_resource::<Guild>(self.guild_id).await? {
-            if guild.get_owner_id() == user_id.get() {
+            if guild.owner_id() == user_id.get() {
                 return Ok(Permissions::all());
             }
         } else {
@@ -503,7 +501,7 @@ impl RoleSet {
         let perms = self
             .0
             .iter()
-            .map(|role| Permissions::from_bits_truncate(role.get_permissions()))
+            .map(|role| Permissions::from_bits_truncate(role.permissions()))
             .fold(Permissions::empty(), |acc, perm| acc | perm);
 
         // Administrators by default have every permission enabled.
@@ -568,15 +566,14 @@ impl ToProto for Guild {
         let mut proto = Self::Proto::new();
         proto.set_id(self.id.get());
         proto.set_name(self.name.clone());
-        proto.features = ::protobuf::RepeatedField::from_vec(
-            self.features
-                .iter()
-                .map(|feature| {
-                    let feature: Cow<'static, str> = feature.clone().into();
-                    feature.to_string()
-                })
-                .collect(),
-        );
+        proto.features = self
+            .features
+            .iter()
+            .map(|feature| {
+                let feature: Cow<'static, str> = feature.clone().into();
+                feature.to_string()
+            })
+            .collect();
         proto.set_owner_id(self.owner_id.get());
         if let Some(ref code) = self.vanity_url_code {
             proto.set_vanity_url_code(code.clone());
@@ -601,15 +598,14 @@ impl ToProto for PartialGuild {
         let mut proto = Self::Proto::new();
         proto.set_id(self.id.get());
         proto.set_name(self.name.clone());
-        proto.features = ::protobuf::RepeatedField::from_vec(
-            self.features
-                .iter()
-                .map(|feature| {
-                    let feature: Cow<'static, str> = feature.clone().into();
-                    feature.to_string()
-                })
-                .collect(),
-        );
+        proto.features = self
+            .features
+            .iter()
+            .map(|feature| {
+                let feature: Cow<'static, str> = feature.clone().into();
+                feature.to_string()
+            })
+            .collect();
         proto.set_owner_id(self.owner_id.get());
         if let Some(ref code) = self.vanity_url_code {
             proto.set_vanity_url_code(code.clone());
@@ -675,7 +671,7 @@ impl ResumeStates {
     pub async fn save_sessions(
         &mut self,
         key: &str,
-        sessions: HashMap<u64, ResumeSession>,
+        sessions: HashMap<u64, Session>,
     ) -> Result<()> {
         let sessions: Vec<(u64, String)> = sessions
             .into_iter()
@@ -688,7 +684,7 @@ impl ResumeStates {
         Ok(())
     }
 
-    pub async fn get_sessions(&mut self, key: &str) -> HashMap<u64, ResumeSession> {
+    pub async fn get_sessions(&mut self, key: &str) -> HashMap<u64, Session> {
         let sessions = redis::Cmd::hgetall(CacheKey::ResumeState(key.into()))
             .query_async::<RedisPool, HashMap<u64, String>>(self.0.connection_mut())
             .await;
@@ -696,7 +692,9 @@ impl ResumeStates {
             sessions
                 .into_iter()
                 .filter_map(|(shard, session)| {
-                    serde_json::from_str(&session).map(|s| (shard, s)).ok()
+                    serde_json::from_str::<'_, Session>(&session)
+                        .map(|s| (shard, s))
+                        .ok()
                 })
                 .collect()
         } else {

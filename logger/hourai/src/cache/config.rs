@@ -3,6 +3,7 @@ use bitflags::bitflags;
 bitflags! {
     /// A set of bitflags which can be used to specify what resource to process
     /// into the cache.
+    #[derive(Clone, Debug, Eq, PartialEq)]
     pub struct ResourceType: u8 {
         const GUILD = 1;
         const MEMBER = 1 << 1;
@@ -19,9 +20,9 @@ pub struct Config {
 }
 
 impl Config {
-    /// Returns an immutable reference to the resource types enabled.
+    /// Returns a copy of the resource types enabled.
     pub fn resource_types(&self) -> ResourceType {
-        self.resource_types
+        self.resource_types.clone()
     }
 
     /// Returns a mutable reference to the resource types enabled.

@@ -23,7 +23,7 @@ impl ModLogger {
 
         Ok(Modlog {
             http: self.http.clone(),
-            channel_id: Id::new(config.get_modlog_channel_id()),
+            channel_id: Id::new(config.modlog_channel_id()),
         })
     }
 }

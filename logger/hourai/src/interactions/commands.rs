@@ -241,7 +241,7 @@ impl InteractionContext for CommandContext {
     }
 
     fn channel_id(&self) -> Id<ChannelMarker> {
-        self.command.channel_id.unwrap()
+        self.command.channel.as_ref().unwrap().id
     }
 
     fn user(&self) -> &User {

@@ -1,6 +1,8 @@
 use crate::config::HouraiConfig;
 use metrics_exporter_prometheus::PrometheusBuilder;
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::Mutex;
 use std::{convert::TryFrom, future::Future, pin::Pin, sync::Arc};
 use tracing::debug;
 
@@ -33,17 +35,53 @@ pub fn init(config: &HouraiConfig) {
     );
 }
 
-pub fn cluster(
+pub fn load_gateway_config(
     config: &HouraiConfig,
     intents: twilight_gateway::Intents,
-) -> twilight_gateway::cluster::ClusterBuilder {
-    let cluster = twilight_gateway::Cluster::builder(config.discord.bot_token.clone(), intents);
+) -> twilight_gateway::Config {
+    let mut builder =
+        twilight_gateway::ConfigBuilder::new(config.discord.bot_token.clone(), intents);
     if let Some(ref uri) = config.discord.gateway_queue {
-        let queue = GatewayQueue(hyper::Uri::try_from(uri.clone()).unwrap());
-        cluster.queue(Arc::new(queue))
-    } else {
-        cluster
+        builder = builder.queue(Arc::new(GatewayQueue(
+            hyper::Uri::try_from(uri.clone()).unwrap(),
+        )));
     }
+
+    builder.build()
+}
+
+pub type ShardMessageSenders = Arc<Vec<twilight_gateway::MessageSender>>;
+
+pub async fn create_shards(
+    config: &HouraiConfig,
+    http_client: &twilight_http::Client,
+    intents: twilight_gateway::Intents,
+    events: twilight_gateway::EventTypeFlags,
+    resume_sessions: HashMap<u64, twilight_gateway::Session>,
+) -> Result<(Vec<twilight_gateway::Shard>, ShardMessageSenders), anyhow::Error> {
+    let gateway_config = load_gateway_config(config, intents);
+    let sessions = Mutex::new(resume_sessions);
+
+    let shards: Vec<_> = twilight_gateway::stream::create_recommended(
+        http_client,
+        gateway_config,
+        |id, mut builder| {
+            builder = builder.event_types(events);
+
+            if let Some(session) = sessions.lock().unwrap().remove(&id.number()) {
+                builder = builder.session(session);
+            }
+
+            builder.build()
+        },
+    )
+    .await
+    .expect("Failed to connect to the discord gateway")
+    .collect();
+
+    let shard_message_senders = Arc::new(shards.iter().map(|shard| shard.sender()).collect());
+
+    Ok((shards, shard_message_senders))
 }
 
 pub fn http_client(config: &HouraiConfig) -> twilight_http::Client {

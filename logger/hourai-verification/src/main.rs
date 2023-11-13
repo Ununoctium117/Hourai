@@ -6,11 +6,9 @@ mod context;
 mod rejectors;
 mod verifier;
 
-use hourai::config;
-
 use anyhow::Result;
-use futures::stream::StreamExt;
 use hourai::{
+    config,
     gateway::{Event, EventTypeFlags, Intents},
     init,
     models::{
@@ -21,7 +19,7 @@ use hourai::{
 };
 
 use hourai_storage::Storage;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 use verifier::BoxedVerifier;
 
 const RESUME_KEY: &str = "VERIFICATION";
@@ -33,38 +31,53 @@ async fn main() {
     let config = config::load_config();
     init::init(&config);
     let storage = Storage::init(&config).await;
-    let sessions = storage
+    let resume_sessions = storage
         .redis()
         .resume_states()
         .get_sessions(RESUME_KEY)
         .await;
     let http = Arc::new(init::http_client(&config));
-    let (gateway, mut events) = init::cluster(&config, BOT_INTENTS)
-        .http_client(http.clone())
-        .event_types(BOT_EVENTS)
-        .resume_sessions(sessions)
-        .build()
-        .await
-        .expect("Failed to connect to the Discord gateway");
-    let gateway = Arc::new(gateway);
+
+    tracing::info!("Starting gateway...");
+    let (shards, _shard_message_senders) =
+        init::create_shards(&config, &http, BOT_INTENTS, BOT_EVENTS, resume_sessions)
+            .await
+            .expect("Failed to connect to the discord gateway");
+    tracing::info!("Client started.");
+
     let client = Client {
         storage: storage.clone(),
     };
 
-    tracing::info!("Starting gateway...");
-    gateway.up().await;
-    tracing::info!("Client started.");
+    let mut shard_join_handles = Vec::new();
+    for mut shard in shards {
+        let client = client.clone();
+        let shard_id = shard.id();
 
-    loop {
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() =>  { break; }
-            res = events.next() => {
-                if let Some((_, evt)) = res {
-                    tokio::spawn(client.clone().consume_event(evt));
-                } else {
-                    break;
+        let handle = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => { return None },
+                    event = shard.next_event() => {
+                        if let Ok(event) = event {
+                            let client = client.clone();
+                            tokio::spawn(async move { client.consume_event(event).await });
+                        } else {
+                            return shard.session().map(|session| (shard_id, session.clone()));
+                        }
+                    }
                 }
             }
+        });
+        shard_join_handles.push(handle);
+        // The shard is dropped here
+    }
+
+    // Keep this main task alive until all shards have finished.
+    let mut sessions = HashMap::new();
+    for join in shard_join_handles {
+        if let Ok(Some((shard_id, session))) = join.await {
+            sessions.insert(shard_id.number(), session);
         }
     }
 
@@ -72,7 +85,7 @@ async fn main() {
     let result = storage
         .redis()
         .resume_states()
-        .save_sessions(RESUME_KEY, gateway.down_resumable())
+        .save_sessions(RESUME_KEY, sessions)
         .await;
     if let Err(err) = result {
         tracing::error!("Error while shutting down cluster: {} ({:?})", err, err);
@@ -89,7 +102,7 @@ impl Client {
     pub async fn consume_event(self, evt: Event) {
         let kind = evt.kind();
         let result = match evt {
-            Event::MemberAdd(evt) => self.on_member_add(evt.0).await,
+            Event::MemberAdd(evt) => self.on_member_add(evt.guild_id, evt.member).await,
             _ => {
                 tracing::error!("Unexpected event type: {:?}", evt);
                 Ok(())
@@ -101,8 +114,8 @@ impl Client {
         }
     }
 
-    async fn on_member_add(&self, evt: Member) -> Result<()> {
-        let _config = self.get_config(evt.guild_id).await?;
+    async fn on_member_add(&self, guild_id: Id<GuildMarker>, _evt: Member) -> Result<()> {
+        let _config = self.get_config(guild_id).await?;
         Ok(())
     }
 

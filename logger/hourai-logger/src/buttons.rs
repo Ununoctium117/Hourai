@@ -1,7 +1,7 @@
 use hourai::{
     interactions::proto_to_custom_id,
     models::{
-        channel::message::{ReactionType, Component, component::*},
+        channel::message::{component::*, Component, ReactionType},
         guild::Permissions,
         id::{marker::UserMarker, Id},
     },
@@ -19,7 +19,7 @@ pub fn ban_button(user_id: Id<UserMarker>, reason: Option<&str>) -> Component {
     if let Some(reason) = reason {
         action.set_reason(reason.to_owned());
     }
-    action.mut_ban().set_field_type(BanMember_Type::BAN);
+    action.mut_ban().set_type(ban_member::Type::BAN);
     create_action_button(BAN_EMOJI, None, Permissions::BAN_MEMBERS, [action])
 }
 
@@ -45,7 +45,8 @@ pub fn create_action_button(
         .set_required_permissions(permissions.bits());
     proto
         .mut_action_button()
-        .mut_actions()
+        .actions
+        .mut_or_insert_default()
         .action
         .extend(actions);
     Component::Button(Button {

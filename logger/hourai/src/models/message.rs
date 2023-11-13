@@ -1,8 +1,8 @@
 use super::user::UserLike;
 use super::Snowflake;
 use crate::proto::cache::{CachedMessageProto, CachedUserProto};
-use twilight_model::channel::Attachment;
 use twilight_model::channel::message::{embed::Embed, Message};
+use twilight_model::channel::Attachment;
 use twilight_model::gateway::payload::incoming::MessageUpdate;
 use twilight_model::id::{marker::*, Id};
 use twilight_model::user::User;
@@ -41,7 +41,7 @@ impl Snowflake<Id<MessageMarker>> for Message {
 
 impl Snowflake<Id<MessageMarker>> for CachedMessageProto {
     fn id(&self) -> Id<MessageMarker> {
-        Id::new(self.get_id())
+        Id::new(CachedMessageProto::id(self))
     }
 }
 
@@ -111,23 +111,19 @@ impl MessageLike for CachedMessageProto {
     type Author = CachedUserProto;
 
     fn channel_id(&self) -> Id<ChannelMarker> {
-        Id::new(self.get_channel_id())
+        Id::new(self.channel_id.unwrap())
     }
 
     fn guild_id(&self) -> Option<Id<GuildMarker>> {
-        if self.has_guild_id() {
-            Some(Id::new(self.get_guild_id()))
-        } else {
-            None
-        }
+        self.guild_id.map(Id::new)
     }
 
     fn author(&self) -> &CachedUserProto {
-        self.get_author()
+        self.author.as_ref().unwrap()
     }
 
     fn content(&self) -> &str {
-        self.get_content()
+        self.content.as_ref().unwrap()
     }
 
     // TODO(james7132): Implement this fix this

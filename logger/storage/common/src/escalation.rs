@@ -204,7 +204,7 @@ impl EscalationHistory {
     ) -> Result<Escalation> {
         if reason.is_empty() {
             anyhow::bail!(EscalationError::NoReason);
-        } else if self.config().get_escalation_ladder().get_rung().is_empty() {
+        } else if self.config().escalation_ladder.rung.is_empty() {
             anyhow::bail!(EscalationError::NoLadderConfigured);
         }
 
@@ -212,13 +212,13 @@ impl EscalationHistory {
         let current_rung = self.get_rung(current_level);
         let mut actions = ActionSet::new();
         if execute {
-            for rung_action in current_rung.as_ref().unwrap().get_action() {
+            for rung_action in &current_rung.as_ref().unwrap().action {
                 let mut action = rung_action.clone();
                 action.set_user_id(self.user_id().get());
                 action.set_guild_id(self.guild_id().get());
                 action.set_reason(reason.to_string());
                 self.executor().execute_action(&action).await?;
-                actions.mut_action().push(action);
+                actions.action.push(action);
             }
         } else {
             let mut action = Action::new();
@@ -226,24 +226,24 @@ impl EscalationHistory {
             action.set_guild_id(self.guild_id().get());
             action.set_reason(reason.to_string());
             action.mut_escalate().set_amount(diff);
-            actions.mut_action().push(action);
+            actions.action.push(action);
         }
 
         let display_name = match current_rung {
-            Some(rung) if diff >= 0 => rung.get_display_name(),
+            Some(rung) if diff >= 0 => rung.display_name(),
             _ => "Deescalate",
         };
 
         let entry = self.create_entry(authorizer, actions, display_name, diff);
         let mut txn = self.storage().sql().begin().await?;
-        let entry_id: i32 = entry.insert().fetch_one(&mut txn).await?.0;
+        let entry_id: i32 = entry.insert().fetch_one(&mut *txn).await?.0;
 
         // Schedule the pending deescalation
         let mut expiration = None;
         if let Some(rung) = current_rung {
             if rung.has_deescalation_period() {
                 expiration =
-                    Some(Utc::now() + Duration::seconds(rung.get_deescalation_period() as i64));
+                    Some(Utc::now() + Duration::seconds(rung.deescalation_period() as i64));
                 let pending = PendingDeescalation {
                     guild_id: self.guild_id().get() as i64,
                     user_id: self.user_id().get() as i64,
@@ -276,7 +276,7 @@ impl EscalationHistory {
         if level < 0 {
             None
         } else {
-            let rungs = self.config().get_escalation_ladder().get_rung();
+            let rungs = &self.config().escalation_ladder.rung;
             let idx = min(level as usize, rungs.len() - 1);
             Some(&rungs[idx])
         }
@@ -310,16 +310,16 @@ impl EscalationHistory {
             .configs()
             .get()
             .await?;
-        let modlog_id = Id::new(config.get_modlog_channel_id());
+        let modlog_id = Id::new(config.modlog_channel_id());
         let arrow = if diff > 0 { "up" } else { "down" };
         let esc = if diff > 0 { "escalated" } else { "deescalated" };
         let reasons: HashSet<&str> = escalation
             .entry
             .action
             .0
-            .get_action()
+            .action
             .iter()
-            .map(|a| a.get_reason())
+            .map(|a| a.reason())
             .collect();
         let reasons = reasons.into_iter().collect::<Vec<_>>().join("; ");
         let msg = format!(

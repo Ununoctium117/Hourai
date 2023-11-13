@@ -39,11 +39,11 @@ pub async fn check_message(executor: &ActionExecutor, message: &impl MessageLike
         false
     };
 
-    for rule in config.get_message_filter().get_rules() {
-        let reasons = get_filter_reasons(moderator, message, rule.get_criteria()).await?;
+    for rule in &config.message_filter.rules {
+        let reasons = get_filter_reasons(moderator, message, &rule.criteria).await?;
         if !reasons.is_empty() {
             apply_rule(message, rule.clone(), reasons, executor).await?;
-            return Ok(rule.get_delete_message());
+            return Ok(rule.delete_message());
         }
     }
 
@@ -83,7 +83,7 @@ async fn apply_rule(
     let channel_id = message.channel_id();
     let message_id = message.id();
 
-    if rule.get_notify_moderator() {
+    if rule.notify_moderator() {
         action_taken = Some(format!(
             "Message filter found notable message by <@{}> in <#{}>",
             author_id, channel_id
@@ -96,7 +96,7 @@ async fn apply_rule(
         );
     }
 
-    if rule.get_delete_message() {
+    if rule.delete_message() {
         action_taken = Some(format!(
             "Message filter deleted a message by <@{}> in <#{}>",
             author_id, channel_id
@@ -139,7 +139,7 @@ async fn apply_rule(
                 let mut action = action_template.clone();
                 action.set_guild_id(guild_id.get());
                 action.set_user_id(author_id.get());
-                action.set_reason(format!("Triggered message filter: {}", rule.get_name()));
+                action.set_reason(format!("Triggered message filter: {}", rule.name()));
                 if let Err(err) = exec.execute_action(&action).await {
                     tracing::error!("Error while running actions for message filter: {}", err);
                     break;
@@ -149,7 +149,7 @@ async fn apply_rule(
     }
 
     if let Some(action_taken) = action_taken {
-        let ping = if rule.get_notify_moderator() {
+        let ping = if rule.notify_moderator() {
             let (_, ping) = hourai_storage::ping_online_mod(guild_id, executor.storage()).await?;
             ping
         } else {
@@ -173,7 +173,7 @@ async fn apply_rule(
         if config.has_modlog_channel_id() {
             executor
                 .http()
-                .create_message(Id::new(config.get_modlog_channel_id()))
+                .create_message(Id::new(config.modlog_channel_id()))
                 .content(&response)?
                 .embeds(&[message_logging::message_to_embed(message)?.build()])?
                 .await?;
@@ -186,15 +186,15 @@ async fn apply_rule(
 async fn get_filter_reasons(
     moderator: bool,
     message: &impl MessageLike,
-    criteria: &MessageFilterRule_Criteria,
+    criteria: &message_filter_rule::Criteria,
 ) -> Result<Vec<String>> {
     let mut reasons = Vec::new();
 
-    let is_bot = criteria.get_exclude_bots() && message.author().bot();
+    let is_bot = criteria.exclude_bots() && message.author().bot();
     let is_in_excluded_channel = criteria
-        .get_excluded_channels()
+        .excluded_channels
         .contains(&message.channel_id().get());
-    let is_moderator = criteria.get_exclude_moderators() && moderator;
+    let is_moderator = criteria.exclude_moderators() && moderator;
 
     if is_bot || is_moderator || is_in_excluded_channel {
         return Ok(reasons);
@@ -211,7 +211,7 @@ async fn get_filter_reasons(
         }
     }
 
-    if criteria.get_includes_slurs() {
+    if criteria.includes_slurs() {
         for word in message.content().split_whitespace() {
             if SLUR_REGEX.is_match(word) {
                 reasons.push(format!("Message contains recognized racial slur: {}", word));
@@ -220,7 +220,7 @@ async fn get_filter_reasons(
         }
     }
 
-    if criteria.get_includes_invite_links() && DISCORD_INVITE_REGEX.is_match(message.content()) {
+    if criteria.includes_invite_links() && DISCORD_INVITE_REGEX.is_match(message.content()) {
         reasons.push("Message contains Discord invite link.".into());
     }
 
@@ -249,9 +249,9 @@ fn get_mention_reason(
     all.extend(users.iter().cloned());
     all.extend(roles.iter().cloned());
 
-    check_limits("user mentions", users, criteria.get_user_mention(), reasons);
-    check_limits("role mentions", roles, criteria.get_role_mention(), reasons);
-    check_limits("mentions", all, criteria.get_any_mention(), reasons);
+    check_limits("user mentions", users, &criteria.user_mention, reasons);
+    check_limits("role mentions", roles, &criteria.role_mention, reasons);
+    check_limits("mentions", all, &criteria.any_mention, reasons);
 }
 
 fn get_embed_reason(
@@ -267,11 +267,11 @@ fn get_embed_reason(
             .filter_map(|embed| embed.url.clone()),
     );
     urls.extend(message.attachments().iter().map(|embed| embed.url.clone()));
-    if criteria.has_max_embed_count() && urls.len() > criteria.get_max_embed_count() as usize {
+    if criteria.has_max_embed_count() && urls.len() > criteria.max_embed_count() as usize {
         reasons.push(format!(
             "Message has {} embeds or attachments. More than the server maximum of {}.",
             urls.len(),
-            criteria.get_max_embed_count()
+            criteria.max_embed_count()
         ));
     }
 }
@@ -279,25 +279,25 @@ fn get_embed_reason(
 fn check_limits(
     name: &str,
     ids: Vec<u64>,
-    limits: &MentionFilterCriteria_MentionLimits,
+    limits: &mention_filter_criteria::MentionLimits,
     reasons: &mut Vec<String>,
 ) {
     let unique = ids.iter().cloned().collect::<HashSet<_>>();
-    if limits.has_maximum_total() && ids.len() > limits.get_maximum_total() as usize {
+    if limits.has_maximum_total() && ids.len() > limits.maximum_total() as usize {
         reasons.push(format!(
             "Total {} more than the server limit (seen: {}, limit: {}).",
             name,
             ids.len(),
-            limits.get_maximum_total()
+            limits.maximum_total()
         ));
     }
 
-    if limits.has_maximum_unique() && unique.len() > limits.get_maximum_unique() as usize {
+    if limits.has_maximum_unique() && unique.len() > limits.maximum_unique() as usize {
         reasons.push(format!(
             "Unique {} more than the server limit (seen: {}, limit: {}).",
             name,
             ids.len(),
-            limits.get_maximum_unique()
+            limits.maximum_unique()
         ));
     }
 }

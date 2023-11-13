@@ -20,7 +20,7 @@ pub async fn on_member_join(client: &Client, guild: Id<GuildMarker>, user: User)
     if let Some(config) = get_config(client.storage(), guild).await? {
         // TODO(james7132): let this be customizable.
         let msg = format!("<@{}> has joined the server.", user.id);
-        broadcast(client, config.get_leaves(), msg);
+        broadcast(client, &config.joins, msg);
     }
     Ok(())
 }
@@ -29,7 +29,7 @@ pub async fn on_member_leave(client: &Client, evt: MemberRemove) -> Result<()> {
     if let Some(config) = get_config(client.storage(), evt.guild_id).await? {
         // TODO(james7132): let this be customizable.
         let msg = format!("**{}** has left the server.", evt.user.name);
-        broadcast(client, config.get_leaves(), msg);
+        broadcast(client, &config.leaves, msg);
     }
     Ok(())
 }
@@ -38,7 +38,7 @@ pub async fn on_member_ban(client: &Client, evt: BanAdd) -> Result<()> {
     if let Some(config) = get_config(client.storage(), evt.guild_id).await? {
         // TODO(james7132): let this be customizable.
         let msg = format!("**{}** has been banned.", evt.user.name);
-        broadcast(client, config.get_bans(), msg);
+        broadcast(client, &config.bans, msg);
     }
     Ok(())
 }
@@ -77,16 +77,16 @@ pub async fn on_voice_update(
                 format!(
                     "**{}** moved from **{}** to **{}**.",
                     user,
-                    b.get_name(),
-                    a.get_name()
+                    b.name(),
+                    a.name()
                 )
             }
-            (None, Some(ch)) => format!("**{}** joined **{}**.", user, ch.get_name()),
-            (Some(ch), None) => format!("**{}** left **{}**.", user, ch.get_name()),
+            (None, Some(ch)) => format!("**{}** joined **{}**.", user, ch.name()),
+            (Some(ch), None) => format!("**{}** left **{}**.", user, ch.name()),
             (None, None) => return Ok(()),
         };
 
-        broadcast(client, config.get_voice(), msg);
+        broadcast(client, &config.voice, msg);
     }
 
     Ok(())
@@ -103,7 +103,7 @@ pub fn broadcast(client: &Client, config: &AnnouncementTypeConfig, message: Stri
     }
 
     let channel_ids = config
-        .get_channel_ids()
+        .channel_ids
         .iter()
         .cloned()
         .map(Id::<ChannelMarker>::new);

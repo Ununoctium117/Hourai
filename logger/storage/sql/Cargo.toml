@@ -9,10 +9,10 @@ hourai = { path = "../../hourai" }
 anyhow = "1.0"
 chrono = "0.4"
 tracing = { default-features = false, features = ["std", "attributes"], version = "0.1" }
-protobuf = "2.22"
-twilight-util = { version = "0.14", features = ["snowflake", "builder"] }
+protobuf = "3"
+twilight-util = { version = "0.15", features = ["snowflake", "builder"] }
 
 [dependencies.sqlx]
 default-features = false
 features = ["runtime-tokio-rustls", "postgres", "macros", "chrono"]
-version = "0.6"
+version = "0.7"

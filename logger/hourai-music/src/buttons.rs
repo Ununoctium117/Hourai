@@ -1,8 +1,6 @@
 use hourai::{
     interactions::proto_to_custom_id,
-    models::{
-        channel::message::{component::*, *},
-    },
+    models::channel::message::{component::*, *},
     proto::message_components::*,
 };
 
@@ -75,7 +73,7 @@ pub fn volume_up_button(ui_type: MusicUIType) -> Component {
 
 fn create_button(emoji: &str, ui_type: MusicUIType, button: MusicButtonOption) -> Component {
     let mut proto = MessageComponentProto::new();
-    proto.mut_music_button().set_field_type(ui_type);
+    proto.mut_music_button().set_type(ui_type);
     proto.mut_music_button().set_button_option(button);
     Component::Button(Button {
         custom_id: Some(proto_to_custom_id(&proto).unwrap()),

@@ -127,11 +127,11 @@ impl Feed {
         let mut txn = sql.begin().await?;
         sqlx::query("DELETE FROM feed_channels WHERE feed_id = $1")
             .bind(self.id)
-            .execute(&mut txn)
+            .execute(&mut *txn)
             .await?;
         sqlx::query("DELETE FROM feeds WHERE id = $1")
             .bind(self.id)
-            .execute(&mut txn)
+            .execute(&mut *txn)
             .await?;
         txn.commit().await?;
         tracing::info!(

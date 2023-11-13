@@ -42,7 +42,7 @@ fn meets_id_filter(filter: &IdFilter, id: u64) -> bool {
 }
 
 fn should_log(config: &MessageLoggingConfig, channel_id: Id<ChannelMarker>) -> bool {
-    config.get_enabled() && meets_id_filter(config.get_channel_filter(), channel_id.get())
+    config.enabled() && meets_id_filter(&config.channel_filter, channel_id.get())
 }
 
 fn get_output_channel(
@@ -50,9 +50,9 @@ fn get_output_channel(
     type_config: &MessageLoggingConfig,
 ) -> Option<Id<ChannelMarker>> {
     let id = if config.has_modlog_channel_id() {
-        config.get_modlog_channel_id()
+        config.modlog_channel_id()
     } else if type_config.has_output_channel_id() {
-        type_config.get_output_channel_id()
+        type_config.output_channel_id()
     } else {
         return None;
     };
@@ -70,7 +70,7 @@ pub(super) async fn on_message_update(
     let guild_id = before.guild_id().ok_or_else(|| anyhow!("Not in guild."))?;
     let redis = client.storage().redis();
     let config: LoggingConfig = redis.guild(guild_id).configs().get().await?;
-    let type_config = config.get_edited_messages();
+    let type_config = &config.edited_messages;
     let output_channel = get_output_channel(&config, type_config);
     if output_channel.is_some() && should_log(type_config, before.channel_id()) {
         client
@@ -93,7 +93,7 @@ pub(super) async fn on_message_delete(client: &mut Client, evt: &MessageDelete) 
     let guild_id = evt.guild_id.ok_or_else(|| anyhow!("Not in guild."))?;
     let redis = client.storage().redis();
     let config: LoggingConfig = redis.guild(guild_id).configs().get().await?;
-    let type_config = config.get_deleted_messages();
+    let type_config = &config.deleted_messages;
     let output_channel = get_output_channel(&config, type_config);
     if output_channel.is_some() && should_log(type_config, evt.channel_id) {
         let cached = redis.messages().fetch(evt.channel_id, evt.id).await?;
@@ -106,8 +106,8 @@ pub(super) async fn on_message_delete(client: &mut Client, evt: &MessageDelete) 
                 .create_message(output_channel.unwrap())
                 .content(&format!(
                     "Message by <@{}> deleted from <#{}>",
-                    msg.author().get_id(),
-                    msg.get_channel_id()
+                    msg.author().id(),
+                    msg.channel_id()
                 ))?
                 .embeds(&vec![message_to_embed(&msg)?
                     .color(0x992d22) // Dark red
@@ -122,7 +122,7 @@ pub(super) async fn on_message_bulk_delete(client: Client, evt: MessageDeleteBul
     let guild_id = evt.guild_id.ok_or_else(|| anyhow!("Not in guild."))?;
     let redis = client.storage().redis();
     let config: LoggingConfig = redis.guild(guild_id).configs().get().await?;
-    let type_config = config.get_deleted_messages();
+    let type_config = &config.deleted_messages;
     let output_channel = get_output_channel(&config, type_config);
     if output_channel.is_some() && should_log(type_config, evt.channel_id) {
         client

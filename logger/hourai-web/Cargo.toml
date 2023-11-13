@@ -8,15 +8,15 @@ edition = "2021"
 hourai = { path = "../hourai" }
 hourai-sql = { path = "../storage/sql" }
 hourai-redis = { path = "../storage/redis" }
-cookie = "0.16"
-protobuf = "2.22"
+cookie = "0.18"
+protobuf = "3"
 futures = { default-features = false, version = "0.3.12" }
 tracing-futures = "0.2"
-tracing-actix-web = "0.6"
+tracing-actix-web = "0.7"
 uuid = { version = "1.1", features = ["v4"] }
 serde = "1.0"
 serde_json = "1.0"
-jsonwebtoken = "8.0"
+jsonwebtoken = "9"
 serde_urlencoded = "0.7"
 thiserror = "1.0"
 time = "0.3"
@@ -26,8 +26,9 @@ actix-web = { version = "4.0", features = ["cookies"] }
 actix-http = "3.0"
 actix-tls = "3.0"
 awc = { version = "3.0", features = ["rustls"] }
+protobuf-json-mapping = "3.3.0"
 
 [dependencies.sqlx]
 default-features = false
 features = ["runtime-tokio-rustls", "postgres", "macros", "chrono"]
-version = "0.6"
+version = "0.7"

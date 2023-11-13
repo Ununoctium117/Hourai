@@ -28,7 +28,7 @@ impl PlayerState {
 
     pub fn save_to_proto(&self) -> MusicStateProto {
         let mut proto = MusicStateProto::new();
-        *proto.mut_queue() = MusicQueueProto::from(&self.queue);
+        *proto.queue.as_mut().unwrap() = MusicQueueProto::from(&self.queue);
         proto
             .skip_votes
             .extend(self.skip_votes.iter().map(|id| id.get()));
@@ -36,7 +36,7 @@ impl PlayerState {
     }
 
     pub fn load_from_proto(&mut self, mut state: MusicStateProto) {
-        self.queue = state.take_queue().into();
+        self.queue = MusicQueue::from(*state.queue.0.take().unwrap());
         self.skip_votes = state.skip_votes.into_iter().map(Id::new).collect();
     }
 }
@@ -82,7 +82,7 @@ impl From<MusicQueueProto> for MusicQueue<Id<UserMarker>, Track> {
     fn from(value: MusicQueueProto) -> Self {
         let mut queue = Self::default();
         for user_queue in value.user_queues {
-            let user_id = Id::new(user_queue.get_user_id());
+            let user_id = Id::new(user_queue.user_id());
             for track in user_queue.tracks {
                 queue.push(user_id, track.into());
             }

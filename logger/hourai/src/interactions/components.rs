@@ -15,12 +15,13 @@ use crate::{
     proto::message_components::MessageComponentProto,
 };
 use anyhow::Result;
+use base64::{Engine as _, engine::general_purpose as b64};
 use protobuf::Message;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
 pub fn proto_to_custom_id(proto: &impl Message) -> Result<String> {
-    Ok(base64::encode(proto.write_to_bytes()?))
+    Ok(b64::STANDARD.encode(proto.write_to_bytes()?))
 }
 
 #[derive(Clone)]
@@ -51,7 +52,7 @@ impl ComponentContext {
     }
 
     pub fn metadata(&self) -> Result<MessageComponentProto> {
-        let decoded = base64::decode(&self.data().custom_id)?;
+        let decoded = base64::engine::general_purpose::STANDARD.decode(&self.data().custom_id)?;
         Ok(MessageComponentProto::parse_from_bytes(&decoded)?)
     }
 }
@@ -78,7 +79,7 @@ impl InteractionContext for ComponentContext {
     }
 
     fn channel_id(&self) -> Id<ChannelMarker> {
-        self.component.channel_id.unwrap()
+        self.component.channel.as_ref().unwrap().id
     }
 
     fn member(&self) -> Option<&PartialMember> {

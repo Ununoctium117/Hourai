@@ -117,7 +117,7 @@ async fn push_posts(feed: &Feed, response: Response, client: &Client) -> Result<
     let min_time = update_time;
 
     let mut text = response.text().await?;
-    simd_json::serde::from_str::<SubmissionListing>(text.as_mut_str())?
+    serde_json::from_str::<SubmissionListing>(text.as_mut_str())?
         .data
         .children
         .into_iter()

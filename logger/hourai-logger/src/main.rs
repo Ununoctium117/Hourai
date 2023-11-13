@@ -14,17 +14,16 @@ mod utils;
 
 use anyhow::Result;
 use core::time::Duration;
-use futures::stream::StreamExt;
 use hourai::{
     cache::{InMemoryCache, ResourceType},
     config,
-    gateway::{cluster::*, Event, EventType, EventTypeFlags, Intents},
+    gateway::{Event, EventTypeFlags, Intents},
     init,
     models::{
         application::interaction::{Interaction, InteractionType},
         channel::{Channel, ChannelType, Message},
         gateway::payload::incoming::*,
-        guild::{member::Member, MemberFlags, Permissions, Role},
+        guild::{Member, MemberFlags, Permissions, Role},
         http::interaction::*,
         id::{marker::*, Id},
         user::User,
@@ -33,7 +32,7 @@ use hourai::{
 use hourai_redis::*;
 use hourai_sql::{Ban, Executor, Username};
 use hourai_storage::{actions::ActionExecutor, Storage};
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 use tracing::{debug, error, info, warn};
 
 const RESUME_KEY: &str = "LOGGER";
@@ -96,19 +95,23 @@ async fn main() {
         warn!("Failed to update global commands: {}", err);
     }
 
-    let sessions = storage
+    let resume_sessions = storage
         .redis()
         .resume_states()
         .get_sessions(RESUME_KEY)
         .await;
-    let (gateway, mut events) = init::cluster(&config, BOT_INTENTS)
-        .http_client(http_client.clone())
-        .event_types(BOT_EVENTS)
-        .resume_sessions(sessions)
-        .build()
-        .await
-        .expect("Failed to connect to the Discord gateway");
-    let gateway = Arc::new(gateway);
+
+    info!("Starting gateway...");
+    let (shards, shard_message_senders) = init::create_shards(
+        &config,
+        &http_client,
+        BOT_INTENTS,
+        BOT_EVENTS,
+        resume_sessions,
+    )
+    .await
+    .expect("Failed to connect to the discord gateway");
+    info!("Client started.");
 
     let user = http_client
         .current_user()
@@ -129,15 +132,11 @@ async fn main() {
     let actions = ActionExecutor::new(user, http_client, storage.clone());
 
     let client = Client(Arc::new(ClientRef {
-        gateway: gateway.clone(),
+        shard_senders: shard_message_senders.clone(),
         cache: cache.clone(),
         actions: actions.clone(),
-        member_chunker: member_chunker::MemberChunker::new(gateway.clone()),
+        member_chunker: member_chunker::MemberChunker::new(shard_message_senders.clone()),
     }));
-
-    info!("Starting gateway...");
-    gateway.up().await;
-    info!("Client started.");
 
     if config.is_prod {
         tokio::spawn(listings::run_push_listings(
@@ -153,22 +152,41 @@ async fn main() {
     tokio::spawn(pending_events::run_pending_actions(actions.clone()));
     tokio::spawn(pending_events::run_pending_deescalations(actions.clone()));
 
-    loop {
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => { break; }
-            res = events.next() => {
-                if let Some((shard_id, evt)) = res {
-                    if evt.kind() == EventType::PresenceUpdate {
-                        cache.update(&evt);
-                    } else {
-                        client.pre_cache_event(&evt).await;
-                        cache.update(&evt);
-                        tokio::spawn(client.clone().consume_event(shard_id, evt));
+    let mut shard_join_handles = Vec::new();
+    for mut shard in shards {
+        let client = client.clone();
+        let cache = cache.clone();
+        let shard_id = shard.id();
+
+        let handle = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => { return None },
+                    event = shard.next_event() => {
+                        if let Ok(event) = event {
+                            client.pre_cache_event(&event).await;
+                            cache.update(&event);
+
+                            let client = client.clone();
+                            tokio::spawn(async move { client.consume_event(shard_id.number(), event).await });
+                        } else {
+                            let session = shard.session().map(|session| (shard_id, session.clone()));
+                            client.shutdown_shard(shard_id.number());
+                            return session;
+                        }
                     }
-                } else {
-                    break;
                 }
             }
+        });
+        shard_join_handles.push(handle);
+        // The shard is dropped here
+    }
+
+    // Keep this main task alive until all shards have finished.
+    let mut sessions = HashMap::new();
+    for join in shard_join_handles {
+        if let Ok(Some((shard_id, session))) = join.await {
+            sessions.insert(shard_id.number(), session);
         }
     }
 
@@ -176,7 +194,7 @@ async fn main() {
     let result = storage
         .redis()
         .resume_states()
-        .save_sessions(RESUME_KEY, gateway.down_resumable())
+        .save_sessions(RESUME_KEY, sessions)
         .await;
     if let Err(err) = result {
         tracing::error!("Error while shutting down cluster: {} ({:?})", err, err);
@@ -202,7 +220,7 @@ async fn flush_online(cache: InMemoryCache, redis: RedisClient) {
 }
 
 struct ClientRef {
-    pub gateway: Arc<Cluster>,
+    pub shard_senders: hourai::ShardMessageSenders,
     pub cache: InMemoryCache,
     pub actions: ActionExecutor,
     pub member_chunker: member_chunker::MemberChunker,
@@ -230,7 +248,7 @@ impl Client {
 
     #[inline(always)]
     pub fn total_shards(&self) -> u64 {
-        self.0.gateway.shards().len() as u64
+        self.0.shard_senders.len() as u64
     }
 
     /// Gets the shard ID for a guild.
@@ -283,7 +301,6 @@ impl Client {
             Event::MemberUpdate(ref evt) => {
                 if self.0.cache.is_pending(evt.guild_id, evt.user.id) && !evt.pending {
                     let member = Member {
-                        guild_id: evt.guild_id,
                         nick: evt.nick.clone(),
                         avatar: None,
                         pending: false,
@@ -299,7 +316,7 @@ impl Client {
                         deaf: false,
                         mute: false,
                     };
-                    self.on_member_add(member).await
+                    self.on_member_add(evt.guild_id, member).await
                 } else {
                     Ok(())
                 }
@@ -315,7 +332,7 @@ impl Client {
         }
     }
 
-    async fn consume_event(mut self, shard_id: u64, event: Event) {
+    async fn consume_event(self, shard_id: u64, event: Event) {
         let kind = event.kind();
         let result = match event {
             Event::Ready(evt) => self.on_shard_ready(shard_id, evt).await,
@@ -331,7 +348,7 @@ impl Client {
                 }
             }
             Event::InteractionCreate(evt) => self.on_interaction_create(evt.0).await,
-            Event::MemberAdd(evt) => self.on_member_add(evt.0).await,
+            Event::MemberAdd(evt) => self.on_member_add(evt.guild_id, evt.member).await,
             Event::MemberChunk(evt) => self.on_member_chunk(evt).await,
             Event::MemberRemove(evt) => self.on_member_remove(evt).await,
             Event::MemberUpdate(evt) => self.on_member_update(*evt).await,
@@ -423,20 +440,20 @@ impl Client {
         Ok(())
     }
 
-    async fn on_member_add(&self, member: Member) -> Result<()> {
+    async fn on_member_add(&self, guild_id: Id<GuildMarker>, member: Member) -> Result<()> {
         if !member.pending {
-            let res = roles::on_member_join(self, &member).await;
+            let res = roles::on_member_join(self, guild_id, &member).await;
             let members = vec![member.clone()];
-            self.log_members(&members).await?;
+            self.log_members(guild_id, &members).await?;
             res?;
         }
-        announcements::on_member_join(self, member.guild_id, member.user).await?;
+        announcements::on_member_join(self, guild_id, member.user).await?;
         Ok(())
     }
 
     async fn on_member_chunk(&self, evt: MemberChunk) -> Result<()> {
         self.0.member_chunker.push_chunk(&evt);
-        while let Err(err) = self.log_members(&evt.members).await {
+        while let Err(err) = self.log_members(evt.guild_id, &evt.members).await {
             error!(
                 "Error while chunking members, retrying: {} ({:?})",
                 err, err
@@ -445,7 +462,7 @@ impl Client {
         Ok(())
     }
 
-    async fn on_member_update(&self, evt: MemberUpdate) -> Result<()> {
+    async fn on_member_update(self, evt: MemberUpdate) -> Result<()> {
         if evt.user.bot {
             return Ok(());
         }
@@ -473,7 +490,7 @@ impl Client {
         Ok(())
     }
 
-    async fn on_channel_create(&self, evt: ChannelCreate) -> Result<()> {
+    async fn on_channel_create(self, evt: ChannelCreate) -> Result<()> {
         if let Some(guild_id) = evt.0.guild_id {
             self.storage()
                 .redis()
@@ -484,7 +501,7 @@ impl Client {
         Ok(())
     }
 
-    async fn on_channel_update(&self, evt: ChannelUpdate) -> Result<()> {
+    async fn on_channel_update(self, evt: ChannelUpdate) -> Result<()> {
         if let Some(guild_id) = evt.0.guild_id {
             self.storage()
                 .redis()
@@ -506,7 +523,7 @@ impl Client {
         Ok(())
     }
 
-    async fn on_thread_create(&mut self, evt: ThreadCreate) -> Result<()> {
+    async fn on_thread_create(self, evt: ThreadCreate) -> Result<()> {
         if evt.0.kind == ChannelType::PublicThread {
             self.http().join_thread(evt.0.id).await?;
             info!("Joined thread {}", evt.0.id);
@@ -514,7 +531,7 @@ impl Client {
         Ok(())
     }
 
-    async fn on_thread_list_sync(&mut self, evt: ThreadListSync) -> Result<()> {
+    async fn on_thread_list_sync(self, evt: ThreadListSync) -> Result<()> {
         for thread in evt.threads {
             if let Err(err) = self.http().join_thread(thread.id).await {
                 error!(
@@ -713,7 +730,7 @@ impl Client {
         Ok(())
     }
 
-    async fn log_members(&self, members: &[Member]) -> Result<()> {
+    async fn log_members(&self, guild_id: Id<GuildMarker>, members: &[Member]) -> Result<()> {
         let usernames = members.iter().map(|m| Username::new(&m.user)).collect();
 
         self.storage()
@@ -721,7 +738,7 @@ impl Client {
             .await?;
         let mut txn = self.storage().sql().begin().await?;
         for member in members {
-            txn.execute(hourai_sql::Member::from(member).insert())
+            txn.execute(hourai_sql::Member::new(guild_id, member).insert())
                 .await?;
         }
         txn.commit().await?;
@@ -755,5 +772,9 @@ impl Client {
             self.storage().execute(Ban::clear_guild(guild_id)).await?;
         }
         Ok(())
+    }
+
+    fn shutdown_shard(self, shard_id: u64) {
+        let _ = self.0.shard_senders[shard_id as usize].close(hourai::gateway::CloseFrame::RESUME);
     }
 }

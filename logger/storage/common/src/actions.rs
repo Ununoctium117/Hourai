@@ -48,19 +48,17 @@ impl ActionExecutor {
 
     pub async fn execute_action(&self, action: &Action) -> Result<()> {
         match action.details {
-            Some(Action_oneof_details::kick(_)) => self.execute_kick(action).await?,
-            Some(Action_oneof_details::ban(ref info)) => self.execute_ban(action, info).await?,
-            Some(Action_oneof_details::escalate(ref info)) => {
+            Some(action::Details::Kick(_)) => self.execute_kick(action).await?,
+            Some(action::Details::Ban(ref info)) => self.execute_ban(action, info).await?,
+            Some(action::Details::Escalate(ref info)) => {
                 self.execute_escalate(action, info).await?
             }
-            Some(Action_oneof_details::mute(ref info)) => self.execute_mute(action, info).await?,
-            Some(Action_oneof_details::deafen(ref info)) => {
-                self.execute_deafen(action, info).await?
-            }
-            Some(Action_oneof_details::change_role(ref info)) => {
+            Some(action::Details::Mute(ref info)) => self.execute_mute(action, info).await?,
+            Some(action::Details::Deafen(ref info)) => self.execute_deafen(action, info).await?,
+            Some(action::Details::ChangeRole(ref info)) => {
                 self.execute_change_role(action, info).await?
             }
-            Some(Action_oneof_details::direct_message(ref info)) => {
+            Some(action::Details::DirectMessage(ref info)) => {
                 if let Err(err) = self.execute_direct_message(action, info).await {
                     tracing::error!(
                         "Error while sending a message to a given channel for an action: {}",
@@ -68,7 +66,7 @@ impl ActionExecutor {
                     );
                 }
             }
-            Some(Action_oneof_details::send_message(ref info)) => {
+            Some(action::Details::SendMessage(ref info)) => {
                 if let Err(err) = self.execute_send_message(info).await {
                     tracing::error!(
                         "Error while sending a message to a given channel for an action: {}",
@@ -76,7 +74,7 @@ impl ActionExecutor {
                     );
                 }
             }
-            Some(Action_oneof_details::delete_messages(ref info)) => {
+            Some(action::Details::DeleteMessages(ref info)) => {
                 if let Err(err) = self.execute_delete_messages(info).await {
                     tracing::error!(
                         "Error while deleteing a message to a given channel for an action: {}",
@@ -84,12 +82,12 @@ impl ActionExecutor {
                     );
                 }
             }
-            None => panic!("Cannot run action without a specified type"),
+            Some(_) | None => panic!("Cannot run action without a specified type"),
         };
 
         // Schedule undo if a duration is set
         if action.has_duration() {
-            let timestamp = Utc::now() + Duration::seconds(action.get_duration() as i64);
+            let timestamp = Utc::now() + Duration::seconds(action.duration() as i64);
             let mut undo = action.clone();
             Self::invert_action(&mut undo);
             undo.clear_duration();
@@ -102,24 +100,24 @@ impl ActionExecutor {
 
     fn invert_action(action: &mut Action) {
         match &mut action.details {
-            Some(Action_oneof_details::ban(ref mut info)) => {
-                info.set_field_type(match info.get_field_type() {
-                    BanMember_Type::BAN => BanMember_Type::UNBAN,
-                    BanMember_Type::UNBAN => BanMember_Type::BAN,
-                    BanMember_Type::SOFTBAN => panic!("Cannot invert a softban"),
+            Some(action::Details::Ban(ref mut info)) => {
+                info.set_type(match info.type_() {
+                    ban_member::Type::BAN => ban_member::Type::UNBAN,
+                    ban_member::Type::UNBAN => ban_member::Type::BAN,
+                    ban_member::Type::SOFTBAN => panic!("Cannot invert a softban"),
                 });
             }
-            Some(Action_oneof_details::escalate(ref mut info)) => {
-                info.set_amount(-info.get_amount());
+            Some(action::Details::Escalate(ref mut info)) => {
+                info.set_amount(-info.amount());
             }
-            Some(Action_oneof_details::mute(ref mut info)) => {
-                info.set_field_type(Self::invert_status(info.get_field_type()));
+            Some(action::Details::Mute(ref mut info)) => {
+                info.set_type(Self::invert_status(info.type_()));
             }
-            Some(Action_oneof_details::deafen(ref mut info)) => {
-                info.set_field_type(Self::invert_status(info.get_field_type()));
+            Some(action::Details::Deafen(ref mut info)) => {
+                info.set_type(Self::invert_status(info.type_()));
             }
-            Some(Action_oneof_details::change_role(ref mut info)) => {
-                info.set_field_type(Self::invert_status(info.get_field_type()));
+            Some(action::Details::ChangeRole(ref mut info)) => {
+                info.set_type(Self::invert_status(info.type_()));
             }
             Some(_) => {
                 panic!("Cannot invert action: {:?}", action);
@@ -137,29 +135,29 @@ impl ActionExecutor {
     }
 
     async fn execute_kick(&self, action: &Action) -> Result<()> {
-        let guild_id = Id::new(action.get_guild_id());
-        let user_id = Id::new(action.get_user_id());
+        let guild_id = Id::new(action.guild_id());
+        let user_id = Id::new(action.user_id());
         self.http
             .remove_guild_member(guild_id, user_id)
-            .reason(action.get_reason())?
+            .reason(action.reason())?
             .await?;
         Ok(())
     }
 
     async fn execute_ban(&self, action: &Action, info: &BanMember) -> Result<()> {
-        let guild_id = Id::new(action.get_guild_id());
-        let user_id = Id::new(action.get_user_id());
-        if info.get_field_type() != BanMember_Type::UNBAN {
+        let guild_id = Id::new(action.guild_id());
+        let user_id = Id::new(action.user_id());
+        if info.type_() != ban_member::Type::UNBAN {
             self.http
                 .create_ban(guild_id, user_id)
-                .reason(action.get_reason())?
-                .delete_message_seconds(info.get_delete_message_days() * SECONDS_IN_DAY)?
+                .reason(action.reason())?
+                .delete_message_seconds(info.delete_message_days() * SECONDS_IN_DAY)?
                 .await?;
         }
-        if info.get_field_type() != BanMember_Type::BAN {
+        if info.type_() != ban_member::Type::BAN {
             self.http
                 .delete_ban(guild_id, user_id)
-                .reason(action.get_reason())?
+                .reason(action.reason())?
                 .await?;
         }
         Ok(())
@@ -171,17 +169,17 @@ impl ActionExecutor {
         info: &'a EscalateMember,
     ) -> BoxFuture<'a, Result<()>> {
         async move {
-            let guild_id = Id::new(action.get_guild_id());
-            let user_id = Id::new(action.get_user_id());
+            let guild_id = Id::new(action.guild_id());
+            let user_id = Id::new(action.user_id());
             let manager = EscalationManager::new(self.clone());
             let guild = manager.guild(guild_id).await?;
             let history = guild.fetch_history(user_id).await?;
             history
                 .apply_delta(
                     /*authorizer=*/ &self.current_user,
-                    /*reason=*/ action.get_reason(),
-                    /*diff=*/ info.get_amount(),
-                    /*execute=*/ info.get_amount() >= 0,
+                    /*reason=*/ action.reason(),
+                    /*diff=*/ info.amount(),
+                    /*execute=*/ info.amount() >= 0,
                 )
                 .await?;
             Ok(())
@@ -190,9 +188,9 @@ impl ActionExecutor {
     }
 
     async fn execute_mute(&self, action: &Action, info: &MuteMember) -> Result<()> {
-        let guild_id = Id::new(action.get_guild_id());
-        let user_id = Id::new(action.get_user_id());
-        let mute = match info.get_field_type() {
+        let guild_id = Id::new(action.guild_id());
+        let user_id = Id::new(action.user_id());
+        let mute = match info.type_() {
             StatusType::APPLY => true,
             StatusType::UNAPPLY => false,
             StatusType::TOGGLE => {
@@ -209,16 +207,16 @@ impl ActionExecutor {
         self.http
             .update_guild_member(guild_id, user_id)
             .mute(mute)
-            .reason(action.get_reason())?
+            .reason(action.reason())?
             .await?;
 
         Ok(())
     }
 
     async fn execute_deafen(&self, action: &Action, info: &DeafenMember) -> Result<()> {
-        let guild_id = Id::new(action.get_guild_id());
-        let user_id = Id::new(action.get_user_id());
-        let deafen = match info.get_field_type() {
+        let guild_id = Id::new(action.guild_id());
+        let user_id = Id::new(action.user_id());
+        let deafen = match info.type_() {
             StatusType::APPLY => true,
             StatusType::UNAPPLY => false,
             StatusType::TOGGLE => {
@@ -235,27 +233,27 @@ impl ActionExecutor {
         self.http
             .update_guild_member(guild_id, user_id)
             .deaf(deafen)
-            .reason(action.get_reason())?
+            .reason(action.reason())?
             .await?;
 
         Ok(())
     }
 
     async fn execute_change_role(&self, action: &Action, info: &ChangeRole) -> Result<()> {
-        let guild_id = Id::new(action.get_guild_id());
-        let user_id = Id::new(action.get_user_id());
+        let guild_id = Id::new(action.guild_id());
+        let user_id = Id::new(action.user_id());
         let member = Member::fetch(guild_id, user_id)
             .fetch_one(self.storage().sql())
             .await?;
 
-        if info.get_role_ids().is_empty() {
+        if info.role_ids.is_empty() {
             return Ok(());
         }
 
         let role_ids: HashSet<Id<RoleMarker>> =
-            info.get_role_ids().iter().cloned().map(Id::new).collect();
+            info.role_ids.iter().cloned().map(Id::new).collect();
         let mut roles: HashSet<Id<RoleMarker>> = member.role_ids().collect();
-        match info.get_field_type() {
+        match info.type_() {
             StatusType::APPLY => {
                 roles.extend(role_ids);
             }
@@ -277,13 +275,13 @@ impl ActionExecutor {
         self.http
             .update_guild_member(guild_id, user_id)
             .roles(&roles)
-            .reason(action.get_reason())?
+            .reason(action.reason())?
             .await?;
         Ok(())
     }
 
     async fn execute_direct_message(&self, action: &Action, info: &DirectMessage) -> Result<()> {
-        let user_id = Id::new(action.get_user_id());
+        let user_id = Id::new(action.user_id());
         let channel = self
             .http
             .create_private_channel(user_id)
@@ -293,22 +291,22 @@ impl ActionExecutor {
 
         self.http
             .create_message(channel.id)
-            .content(info.get_content())?
+            .content(info.content())?
             .await?;
         Ok(())
     }
 
     async fn execute_send_message(&self, info: &SendMessage) -> Result<()> {
-        let channel_id = Id::new(info.get_channel_id());
+        let channel_id = Id::new(info.channel_id());
         self.http
             .create_message(channel_id)
-            .content(info.get_content())?
+            .content(info.content())?
             .await?;
         Ok(())
     }
 
     async fn execute_delete_messages(&self, info: &DeleteMessages) -> Result<()> {
-        let channel_id = Id::new(info.get_channel_id());
+        let channel_id = Id::new(info.channel_id());
         let message_ids: Vec<Id<MessageMarker>> =
             info.message_ids.iter().cloned().map(Id::new).collect();
         match message_ids.len() {
@@ -317,7 +315,7 @@ impl ActionExecutor {
                 self.http.delete_message(channel_id, message_ids[0]).await?;
             }
             _ => {
-                self.http.delete_messages(channel_id, &message_ids).await?;
+                self.http.delete_messages(channel_id, &message_ids)?.await?;
             }
         }
         Ok(())

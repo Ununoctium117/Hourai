@@ -25,8 +25,8 @@ use rand::Rng;
 use std::collections::HashSet;
 
 pub fn is_moderator_role(role: &CachedRoleProto) -> bool {
-    let name = role.get_name().to_lowercase();
-    let perms = Permissions::from_bits_truncate(role.get_permissions());
+    let name = role.name().to_lowercase();
+    let perms = Permissions::from_bits_truncate(role.permissions());
     perms.contains(Permissions::ADMINISTRATOR)
         || name.starts_with("mod")
         || name.starts_with("admin")
@@ -53,7 +53,7 @@ pub async fn find_moderators(
     let mod_roles: Vec<Id<RoleMarker>> = find_moderator_roles(guild_id, redis)
         .await?
         .into_iter()
-        .map(|role| Id::new(role.get_role_id()))
+        .map(|role| Id::new(role.role_id()))
         .collect();
     Ok(Member::find_with_roles(guild_id, mod_roles)
         .fetch_all(sql)
@@ -94,8 +94,8 @@ pub async fn ping_online_mod(
     let mention: String;
     let ping: String;
     if online_mods.is_empty() {
-        mention = format!("<@{}>", guild.get_owner_id());
-        ping = format!("<@{}>, No mods online!", guild.get_owner_id());
+        mention = format!("<@{}>", guild.owner_id());
+        ping = format!("<@{}>, No mods online!", guild.owner_id());
     } else {
         let idx = rand::thread_rng().gen_range(0..online_mods.len());
         mention = format!("<@{}>", online_mods[idx].user_id());
@@ -113,7 +113,7 @@ pub async fn is_moderator(
     let moderator_roles: HashSet<Id<RoleMarker>> = find_moderator_roles(guild_id, redis)
         .await?
         .iter()
-        .map(|role| Id::new(role.get_role_id()))
+        .map(|role| Id::new(role.role_id()))
         .collect();
     Ok(roles.any(move |role_id| moderator_roles.contains(&role_id)))
 }

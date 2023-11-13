@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose as b64, Engine};
 use hourai::{
     models::{
         id::{marker::GuildMarker, Id},
@@ -38,12 +39,18 @@ pub struct Track {
 
 impl Track {
     pub fn play(&self, guild_id: Id<GuildMarker>) -> Play {
-        Play::new(guild_id, base64::encode(&self.track), None, None, false)
+        Play::new(
+            guild_id,
+            b64::STANDARD.encode(&self.track),
+            None,
+            None,
+            false,
+        )
     }
 }
 
 fn decode_track(track: String) -> std::result::Result<Vec<u8>, base64::DecodeError> {
-    base64::decode(&track).map_err(|err| {
+    b64::STANDARD.decode(&track).map_err(|err| {
         error!("Failed to decode track {}: {:?}", track, err);
         err
     })
@@ -75,7 +82,7 @@ impl TryFrom<(User, twilight_lavalink::http::Track)> for Track {
 impl From<Track> for TrackProto {
     fn from(value: Track) -> Self {
         let mut proto = Self::new();
-        *proto.mut_requestor() = value.requestor;
+        *proto.requestor.as_mut().unwrap() = value.requestor;
         if let Some(title) = value.info.title {
             proto.set_title(title);
         }
@@ -105,13 +112,13 @@ impl From<TrackProto> for Track {
         };
 
         Self {
-            requestor: value.take_requestor(),
+            requestor: (*value.requestor).clone(),
             info: TrackInfo {
                 title,
                 author,
                 uri: value.take_uri(),
-                length: Duration::from_millis(value.get_length()),
-                is_stream: value.get_is_stream(),
+                length: Duration::from_millis(value.length()),
+                is_stream: value.is_stream(),
             },
             track: value.take_track_data(),
         }

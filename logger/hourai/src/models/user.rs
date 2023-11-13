@@ -61,7 +61,7 @@ impl Snowflake<Id<UserMarker>> for Member {
 
 impl Snowflake<Id<UserMarker>> for CachedUserProto {
     fn id(&self) -> Id<UserMarker> {
-        Id::new(self.get_id())
+        Id::new(CachedUserProto::id(self))
     }
 }
 
@@ -103,22 +103,22 @@ impl UserLike for Member {
 
 impl UserLike for CachedUserProto {
     fn name(&self) -> &str {
-        self.get_username()
+        self.username.as_ref().unwrap()
     }
 
     fn discriminator(&self) -> u16 {
-        self.get_discriminator() as u16
+        self.discriminator.unwrap() as u16
     }
 
     fn avatar_hash(&self) -> Option<ImageHash> {
-        if self.has_avatar() {
-            ImageHash::parse(self.get_avatar().as_bytes()).ok()
+        if let Some(ref avatar) = self.avatar {
+            ImageHash::parse(avatar.as_bytes()).ok()
         } else {
             None
         }
     }
 
     fn bot(&self) -> bool {
-        self.get_bot()
+        self.bot.unwrap()
     }
 }

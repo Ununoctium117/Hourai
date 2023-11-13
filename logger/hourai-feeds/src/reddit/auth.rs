@@ -46,7 +46,7 @@ impl RedditAuth {
             .text()
             .await?;
         tracing::debug!("Refreshed token: {:?}", response);
-        Ok(simd_json::serde::from_str(response.as_mut_str())?)
+        Ok(serde_json::from_str(response.as_mut_str())?)
     }
 }
 

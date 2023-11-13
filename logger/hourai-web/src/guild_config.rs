@@ -3,25 +3,27 @@ use actix_web::{http::StatusCode, web};
 use hourai::{models::id::Id, proto::auto_config::*, proto::guild_configs::*};
 use hourai_redis::CachedGuildConfig;
 
-async fn get_config<T>(
-    data: web::Data<AppState>,
-    path: web::Path<u64>,
-) -> Result<Option<web::Json<T>>>
+async fn get_config<T>(data: web::Data<AppState>, path: web::Path<u64>) -> Result<Option<Vec<u8>>>
 where
-    T: protobuf::Message + CachedGuildConfig + serde::Serialize,
+    T: protobuf::MessageFull + CachedGuildConfig,
 {
     // TODO(james7132): Properly set up authN and authZ for this
     let proto = data
         .redis
         .guild(Id::new(path.into_inner()))
         .configs()
-        .fetch()
+        .fetch::<T>()
         .await
         .http_error(StatusCode::NOT_FOUND, "Guild not found")?;
-    Ok(proto.map(web::Json))
+
+    Ok(proto
+        .map(|t| protobuf_json_mapping::print_to_string(&t))
+        .transpose()
+        .http_internal_error("Failed to serialize config")?
+        .map(String::into_bytes))
 }
 
-fn add_config<T: protobuf::Message + CachedGuildConfig + serde::Serialize>(
+fn add_config<T: protobuf::MessageFull + CachedGuildConfig>(
     cfg: &mut web::ServiceConfig,
     endpoint: &str,
 ) {

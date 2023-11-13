@@ -1,4 +1,4 @@
-use hourai::models::guild::Member;
+use hourai::models::{guild::Member, id::{marker::GuildMarker, Id}};
 
 #[derive(Debug, Clone)]
 pub enum VerificationReason {
@@ -31,13 +31,15 @@ impl VerificationReason {
 }
 
 pub struct VerificationContext {
+    guild_id: Id<GuildMarker>,
     member: Member,
     reasons: Vec<VerificationReason>,
 }
 
 impl VerificationContext {
-    pub fn new(member: Member) -> Self {
+    pub fn new(guild_id: Id<GuildMarker>, member: Member) -> Self {
         Self {
+            guild_id,
             member,
             reasons: Vec::new(),
         }
@@ -45,6 +47,10 @@ impl VerificationContext {
 
     pub fn member(&self) -> &Member {
         &self.member
+    }
+
+    pub fn guild_id(&self) -> Id<GuildMarker> {
+        self.guild_id
     }
 
     pub fn add_approval_reason(&mut self, reason: impl Into<String>) {

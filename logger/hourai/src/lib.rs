@@ -20,8 +20,8 @@ pub mod proto {
 
     impl Ord for CachedRoleProto {
         fn cmp(&self, other: &Self) -> Ordering {
-            match self.get_position().cmp(&other.get_position()) {
-                Ordering::Equal => self.get_role_id().cmp(&other.get_role_id()),
+            match self.position.unwrap().cmp(&other.position.unwrap()) {
+                Ordering::Equal => self.role_id.unwrap().cmp(&other.role_id.unwrap()),
                 ordering => ordering,
             }
         }
@@ -50,3 +50,5 @@ pub mod proto {
 
 pub use twilight_gateway as gateway;
 pub use twilight_http as http;
+
+pub use init::ShardMessageSenders;

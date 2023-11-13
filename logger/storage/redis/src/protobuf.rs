@@ -10,17 +10,12 @@ impl<T: protobuf::Message> Protobuf<T> {
         }
     }
 
-    fn convert_error(err: protobuf::error::ProtobufError) -> RedisError {
-        use protobuf::error::ProtobufError;
-        use redis::ErrorKind;
-        match err {
-            ProtobufError::IoError(io_err) => RedisError::from(io_err),
-            general_err => RedisError::from((
-                ErrorKind::ResponseError,
-                "Failed to parse Protobuf",
-                general_err.to_string(),
-            )),
-        }
+    fn convert_error(err: protobuf::Error) -> RedisError {
+        RedisError::from((
+            redis::ErrorKind::ResponseError,
+            "Failed to parse Protobuf",
+            err.to_string(),
+        ))
     }
 }
 

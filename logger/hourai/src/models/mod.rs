@@ -27,6 +27,7 @@ pub trait Snowflake<I: SnowflakeId> {
 }
 
 bitflags::bitflags! {
+    #[derive(Clone)]
     pub struct RoleFlags : u64 {
         const DJ = 1;
         const MODERATOR = 1 << 2;

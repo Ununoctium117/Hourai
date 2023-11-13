@@ -9,7 +9,7 @@ hourai = { path = "../hourai" }
 hourai-redis = { path = "../storage/redis" }
 anyhow = "1.0"
 async-trait = "0.1.42"
-base64 = "0.13"
+base64 = "0.21"
 dashmap = { default-features = false, version = "5.2" }
 futures = { default-features = false, version = "0.3.12" }
 http = { default-features = false, version = "0.2" }
@@ -17,8 +17,8 @@ hyper = { features = ["client", "http2", "runtime"], version = "0.14" }
 rand = "0.8"
 serde_json = "1.0.62"
 tracing = { default-features = false, features = ["std", "attributes"], version = "0.1" }
-twilight-util = { version = "0.14",  features = ["snowflake", "builder"] }
-twilight-lavalink = "0.14"
+twilight-util = { version = "0.15",  features = ["snowflake", "builder"] }
+twilight-lavalink = "0.15"
 
 [dependencies.tokio]
 default-features = false

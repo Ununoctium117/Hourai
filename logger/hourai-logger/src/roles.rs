@@ -28,9 +28,9 @@ async fn get_role_flags(
 ) -> Result<HashMap<u64, RoleFlags>> {
     let config: RoleConfig = storage.redis().guild(guild_id).configs().get().await?;
     Ok(config
-        .get_settings()
+        .settings
         .iter()
-        .map(|(k, v)| (*k, RoleFlags::from_bits_truncate(v.get_flags())))
+        .map(|(k, v)| (*k, RoleFlags::from_bits_truncate(v.flags())))
         .collect())
 }
 
@@ -40,15 +40,14 @@ async fn get_verification_role(
 ) -> Result<Option<Id<RoleMarker>>> {
     let config: VerificationConfig = storage.redis().guild(guild_id).configs().get().await?;
 
-    if config.get_enabled() && config.has_role_id() {
-        Ok(Some(Id::new(config.get_role_id())))
+    if config.enabled() && config.has_role_id() {
+        Ok(Some(Id::new(config.role_id())))
     } else {
         Ok(None)
     }
 }
 
-pub async fn on_member_join(client: &Client, member: &Member) -> Result<()> {
-    let guild_id = member.guild_id;
+pub async fn on_member_join(client: &Client, guild_id: Id<GuildMarker>, member: &Member) -> Result<()> {
     let user_id = member.user.id;
 
     let bot_roles = match get_roles(client.storage(), guild_id, client.user_id()).await {
@@ -84,12 +83,12 @@ pub async fn on_member_join(client: &Client, member: &Member) -> Result<()> {
         .iter()
         .filter(|role| {
             let role_flags = flags
-                .get(&role.get_role_id())
+                .get(&role.role_id())
                 .cloned()
                 .unwrap_or_else(RoleFlags::empty);
             role < &&max_role && role_flags.contains(RoleFlags::RESTORABLE)
         })
-        .map(|role| Id::new(role.get_role_id()))
+        .map(|role| Id::new(role.role_id()))
         .collect();
 
     // Do not give out the verification role if it is enabled.

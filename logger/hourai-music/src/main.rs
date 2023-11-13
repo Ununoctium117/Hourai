@@ -17,7 +17,7 @@ use dashmap::DashMap;
 use futures::stream::StreamExt;
 use hourai::{
     config,
-    gateway::{cluster::*, Event, EventTypeFlags, Intents},
+    gateway::{Event, EventTypeFlags, Intents},
     init,
     models::{
         application::interaction::{Interaction, InteractionType},
@@ -27,6 +27,7 @@ use hourai::{
         id::{marker::*, Id},
     },
     proto::{guild_configs::MusicConfig, music_bot::MusicStateProto},
+    ShardMessageSenders,
 };
 use hourai_redis::*;
 use http::Uri;
@@ -38,7 +39,7 @@ use hyper::{
     service::Service,
     Body, Request,
 };
-use std::{convert::TryFrom, str::FromStr};
+use std::{collections::HashMap, convert::TryFrom, str::FromStr};
 use twilight_lavalink::{model::*, Lavalink};
 
 const RESUME_KEY: &str = "MUSIC";
@@ -65,15 +66,20 @@ async fn main() {
 
     let http_client = Arc::new(init::http_client(&config));
     let redis = hourai_redis::init(&config).await;
-    let sessions = redis.resume_states().get_sessions(RESUME_KEY).await;
-    let (gateway, mut events) = init::cluster(&config, BOT_INTENTS)
-        .http_client(http_client.clone())
-        .event_types(BOT_EVENTS)
-        .resume_sessions(sessions)
-        .build()
-        .await
-        .expect("Failed to connect to the Discord gateway");
-    let gateway = Arc::new(gateway);
+    let resume_sessions = redis.resume_states().get_sessions(RESUME_KEY).await;
+
+    tracing::info!("Starting gateway...");
+    let (shards, shard_message_senders) = init::create_shards(
+        &config,
+        &http_client,
+        BOT_INTENTS,
+        BOT_EVENTS,
+        resume_sessions,
+    )
+    .await
+    .expect("Failed to connect to the discord gateway");
+    tracing::info!("Client started.");
+
     let current_user = http_client
         .current_user()
         .await
@@ -81,15 +87,12 @@ async fn main() {
         .model()
         .await
         .unwrap();
-    let lavalink = Arc::new(Lavalink::new(
-        current_user.id,
-        gateway.shards().len() as u64,
-    ));
+    let lavalink = Arc::new(Lavalink::new(current_user.id, shards.len() as u64));
     let client = Client {
         user_id: current_user.id,
         http_client,
         lavalink: lavalink.clone(),
-        gateway: gateway.clone(),
+        shard_senders: shard_message_senders.clone(),
         states: Arc::new(DashMap::new()),
         hyper: HyperClient::new(),
         redis: redis.clone(),
@@ -100,30 +103,42 @@ async fn main() {
         tokio::spawn(client.clone().run_node(node));
     }
 
-    info!("Starting gateway...");
-    gateway.up().await;
-    info!("Client started.");
+    let mut shard_join_handles = Vec::new();
+    for mut shard in shards {
+        let client = client.clone();
+        let shard_id = shard.id();
 
-    loop {
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() =>  { break; }
-            res = events.next() => {
-                if let Some((_, evt)) = res {
-                    if let Err(err) = lavalink.process(&evt).await {
-                        error!("Error while handling Lavalink event: {}", err);
+        let handle = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => { return None },
+                    event = shard.next_event() => {
+                        if let Ok(event) = event {
+                            let client = client.clone();
+                            tokio::spawn(async move { client.consume_event(event).await });
+                        } else {
+                            return shard.session().map(|session| (shard_id, session.clone()));
+                        }
                     }
-                    tokio::spawn(client.clone().consume_event(evt));
-                } else {
-                    break;
                 }
             }
+        });
+        shard_join_handles.push(handle);
+        // The shard is dropped here
+    }
+
+    // Keep this main task alive until all shards have finished.
+    let mut sessions = HashMap::new();
+    for join in shard_join_handles {
+        if let Ok(Some((shard_id, session))) = join.await {
+            sessions.insert(shard_id.number(), session);
         }
     }
 
     info!("Shutting down gateway...");
     let result = redis
         .resume_states()
-        .save_sessions(RESUME_KEY, gateway.down_resumable())
+        .save_sessions(RESUME_KEY, sessions)
         .await;
     if let Err(err) = result {
         tracing::error!("Error while shutting down cluster: {} ({:?})", err, err);
@@ -136,7 +151,7 @@ pub struct Client {
     pub user_id: Id<UserMarker>,
     pub http_client: Arc<hourai::http::Client>,
     pub hyper: HyperClient<HttpConnector>,
-    pub gateway: Arc<Cluster>,
+    pub shard_senders: ShardMessageSenders,
     pub lavalink: Arc<twilight_lavalink::Lavalink>,
     pub states: Arc<DashMap<Id<GuildMarker>, PlayerState>>,
     pub redis: RedisClient,
@@ -235,8 +250,7 @@ impl Client {
                 let state = self.load_state(evt.id).await?;
                 self.connect(evt.id, channel_id).await?;
                 if state.has_position() {
-                    self.start_playing(evt.id, Some(state.get_position()))
-                        .await?;
+                    self.start_playing(evt.id, Some(state.position())).await?;
                 } else {
                     self.start_playing(evt.id, None).await?;
                 }
@@ -269,17 +283,12 @@ impl Client {
                     .await?;
             }
             InteractionType::ApplicationCommand => {
-                let ctx = hourai::interactions::CommandContext::new(
-                    self.http_client.clone(),
-                    evt
-                );
+                let ctx = hourai::interactions::CommandContext::new(self.http_client.clone(), evt);
                 interactions::handle_command(self, ctx).await?;
             }
             InteractionType::MessageComponent => {
-                let ctx = hourai::interactions::ComponentContext::new(
-                    self.http_client.clone(),
-                    evt,
-                );
+                let ctx =
+                    hourai::interactions::ComponentContext::new(self.http_client.clone(), evt);
                 interactions::handle_component(self, ctx).await?;
             }
             interaction => {
@@ -460,7 +469,7 @@ impl Client {
             let config = self.get_config(guild_id).await?;
             let player = self.lavalink.player(guild_id).await?;
             let volume = if config.has_volume() {
-                config.get_volume()
+                config.volume()
             } else {
                 50
             };
@@ -500,28 +509,22 @@ impl Client {
         guild_id: Id<GuildMarker>,
         channel_id: Id<ChannelMarker>,
     ) -> Result<()> {
-        self.gateway
-            .command(
-                self.gateway.shard_id(guild_id),
-                &UpdateVoiceState::new(
-                    guild_id, channel_id, /* self_deaf */ false, /* self_mute */ false,
-                ),
-            )
-            .await?;
+        self.shard_senders[self.shard_senders.shard_id(guild_id)].command(
+            &UpdateVoiceState::new(
+                guild_id, channel_id, /* self_deaf */ false, /* self_mute */ false,
+            ),
+        )?;
 
         info!("Connected to channel {} in guild {}", channel_id, guild_id);
         Ok(())
     }
 
     pub async fn disconnect(&self, guild_id: Id<GuildMarker>) -> Result<()> {
-        self.gateway
-            .command(
-                self.gateway.shard_id(guild_id),
-                &UpdateVoiceState::new(
-                    guild_id, None, /* self_deaf */ false, /* self_mute */ false,
-                ),
-            )
-            .await?;
+        self.shard_senders[self.shard_senders.shard_id(guild_id)].command(
+            &UpdateVoiceState::new(
+                guild_id, None, /* self_deaf */ false, /* self_mute */ false,
+            ),
+        )?;
         info!("Disconnected from guild {}", guild_id);
 
         self.lavalink.players().destroy(guild_id)?;

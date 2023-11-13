@@ -3,7 +3,7 @@ use anyhow::Result;
 use hourai::{
     interactions::{CommandContext, InteractionContext, Response},
     models::{
-        channel::message::{embed::Embed, component::*},
+        channel::message::{component::*, embed::Embed},
         id::{marker::*, Id},
         UserLike,
     },
@@ -193,7 +193,7 @@ impl EmbedUIBuilder for QueueUI {
                 format_duration(track.info.length),
                 track.info,
                 track.info.uri,
-                track.requestor.get_id()
+                track.requestor.id()
             )
         }
 

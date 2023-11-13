@@ -3,12 +3,9 @@ use crate::{interaction_ui::*, player::PlayerState, queue::MusicQueue, track::Tr
 use anyhow::{bail, Result};
 use hourai::{
     interactions::*,
-    models::{
-        id::{
-            marker::{ChannelMarker, GuildMarker, RoleMarker},
-            Id,
-        },
-        Snowflake,
+    models::id::{
+        marker::{ChannelMarker, GuildMarker, RoleMarker},
+        Id,
     },
     proto::{guild_configs::MusicConfig, message_components::MusicButtonOption},
 };
@@ -95,8 +92,8 @@ pub async fn handle_command(client: Client, ctx: CommandContext) -> Result<()> {
 
 pub async fn handle_component(client: Client, ctx: ComponentContext) -> Result<()> {
     let proto = ctx.metadata()?;
-    let button = proto.get_music_button();
-    match button.get_button_option() {
+    let button = proto.music_button();
+    match button.button_option() {
         MusicButtonOption::MUSIC_BUTTON_PLAY_PAUSE => {
             ctx.defer_update().await?;
             pause(&client, &ctx, None).await?;
@@ -130,7 +127,7 @@ pub async fn handle_component(client: Client, ctx: ComponentContext) -> Result<(
 
     tracing::info!(
         "Recieved message component interactoin: {:?} {:?}",
-        button.get_button_option(),
+        button.button_option(),
         ctx.component
     );
 
@@ -176,7 +173,7 @@ fn require_playing(client: &Client, ctx: &impl InteractionContext) -> Result<Id<
 }
 
 fn is_dj(config: &MusicConfig, roles: &[Id<RoleMarker>]) -> bool {
-    let dj_roles = config.get_dj_role_id();
+    let dj_roles = &config.dj_role_id;
     roles.iter().any(|id| dj_roles.contains(&id.get()))
 }
 
@@ -400,7 +397,7 @@ async fn remove(client: &Client, ctx: &CommandContext) -> Result<Response> {
     let response = client
         .mutate_state(guild_id, |state| {
             match state.queue.get(idx).map(|kv| kv.value.clone()) {
-                Some(track) if user.id.get() == track.requestor.get_id() || dj => {
+                Some(track) if user.id.get() == track.requestor.id() || dj => {
                     state.queue.remove(idx);
                     format!("Removed `{}` from the queue.", track.info)
                 }
